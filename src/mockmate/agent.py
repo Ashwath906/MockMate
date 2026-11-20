@@ -1,11 +1,14 @@
 
-
 import os
 from dotenv import load_dotenv
+from pydantic import ValidationError
+
 from langchain.chat_models import init_chat_model
 from langchain.agents import create_agent
 
 from mockmate.tools import save_file
+from mockmate.scorecard import InterviewScorecard
+from mockmate.memory import checkpointer, get_thread_config
 
 load_dotenv()
 
@@ -34,21 +37,30 @@ Your responsibilities:
 6. Be professional and supportive.
 7. Never ask multiple questions in one message.
 8. Use the save_file tool when interview information needs to be saved.
+9. Remember the previous messages in the current interview.
 """
 
 agent = create_agent(
     model=model,
     tools=[save_file],
-    system_prompt=SYSTEM_PROMPT
+    system_prompt=SYSTEM_PROMPT,
+    checkpointer=checkpointer
 )
 
 
-def ask_interviewer(user_input: str) -> str:
-    result = agent.invoke({
-        "messages": [
-            {"role": "user", "content": user_input}
-        ]
-    })
+def ask_interviewer(
+    user_input: str,
+    thread_id: str = "mockmate-default"
+) -> str:
+
+    result = agent.invoke(
+        {
+            "messages": [
+                {"role": "user", "content": user_input}
+            ]
+        },
+        config=get_thread_config(thread_id)
+    )
 
     content = result["messages"][-1].content
 
@@ -64,11 +76,12 @@ def ask_interviewer(user_input: str) -> str:
 
     return str(content)
 
-from pydantic import ValidationError
-from mockmate.scorecard import InterviewScorecard
 
+def evaluate_answer(
+    question: str,
+    answer: str
+) -> InterviewScorecard:
 
-def evaluate_answer(question: str, answer: str) -> InterviewScorecard:
     evaluation_prompt = f"""
     Evaluate this interview answer honestly.
 
@@ -82,7 +95,9 @@ def evaluate_answer(question: str, answer: str) -> InterviewScorecard:
     Give 1 next topic.
     """
 
-    structured_model = model.with_structured_output(InterviewScorecard)
+    structured_model = model.with_structured_output(
+        InterviewScorecard
+    )
 
     for attempt in range(2):
         try:
@@ -98,4 +113,18 @@ def evaluate_answer(question: str, answer: str) -> InterviewScorecard:
             Try again. Follow every scorecard requirement exactly.
             """
 
-    raise ValueError("Gemini failed to generate a valid scorecard after 2 attempts.")
+    raise ValueError(
+        "Gemini failed to generate a valid scorecard after 2 attempts."
+    )
+
+def has_saved_conversation(thread_id: str) -> bool:
+    """Check whether a conversation exists in SQLite memory."""
+
+    state = agent.get_state(
+        get_thread_config(thread_id)
+    )
+
+    return bool(
+        state.values
+        and state.values.get("messages")
+    )
