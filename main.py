@@ -1,333 +1,469 @@
-from mockmate.weak_topics import record_weak_topics, read_weak_topics
+
 import json
 from datetime import datetime
 from pathlib import Path
 
 from mockmate.agent import ask_interviewer, evaluate_answer
-from mockmate.weak_topics import record_weak_topics
+from mockmate.weak_topics import (
+    record_weak_topics,
+    read_weak_topics,
+    reset_weak_topics,
+)
+
 
 SESSIONS_DIR = Path("workspace/sessions")
+WEAK_TOPICS_FILE = Path("workspace/weak-topics.md")
 
+
+# --------------------------------------------------
+# SESSION FILE MANAGEMENT
+# --------------------------------------------------
 
 def save_session(session, session_file):
+    """Save interview session automatically."""
     session["updated_at"] = datetime.now().isoformat()
+
+    session_file.parent.mkdir(parents=True, exist_ok=True)
     session_file.write_text(
         json.dumps(session, indent=4),
-        encoding="utf-8"
+        encoding="utf-8",
     )
-
-
-def print_scorecard(scorecard):
-    print("\n========== SCORECARD ==========")
-    print("Score:", scorecard.score, "/ 10")
-
-    print("\nStrengths:")
-    for strength in scorecard.strengths:
-        print("-", strength)
-
-    print("\nAreas to improve:")
-    for gap in scorecard.gaps:
-        print("-", gap)
-
-    print("\nHint:", scorecard.hint)
-    print("Next topic:", scorecard.next_topic)
-    print("===============================")
-
-
-def choose_session():
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-
-    existing_sessions = sorted(
-        SESSIONS_DIR.glob("session_*.json"),
-        reverse=True
-    )
-
-    print("\n===================================")
-    print("       WELCOME TO MOCKMATE")
-    print("  Your AI Mock Interview Assistant")
-    print("===================================")
-
-    if existing_sessions:
-        print("\nPrevious interviews:")
-        for file in existing_sessions:
-            print("-", file.stem)
-
-    choice = input(
-        "\nEnter a Session ID to resume, "
-        "or press Enter for a new interview:\nYou: "
-    ).strip()
-
-    if choice:
-        session_file = SESSIONS_DIR / f"{choice}.json"
-
-        if not session_file.is_file():
-            print("\nSession not found. Starting a new interview.")
-            return None, None, False
-
-        session = json.loads(
-            session_file.read_text(encoding="utf-8")
-        )
-        return session, session_file, True
-
-    return None, None, False
 
 
 def create_session():
-    print("\n========== INTERVIEW SETUP ==========")
+    """Create a new interview session."""
 
-    role = input(
-        "Enter your interview role (or type 'just start'): "
-    ).strip()
+    print("\n--- New MockMate Interview ---")
 
-    if role.lower() == "just start" or not role:
+    role = input("Enter your target role (or type 'just start'): ").strip()
+    if not role or role.lower() == "just start":
         role = "Software Engineer"
-        round_type = "Technical"
+
+    interview_round = input(
+        "Enter interview round (or type 'just start'): "
+    ).strip()
+    if not interview_round or interview_round.lower() == "just start":
+        interview_round = "Technical"
+
+    difficulty = input(
+        "Enter difficulty (Easy/Medium/Hard, or 'just start'): "
+    ).strip()
+    if not difficulty or difficulty.lower() == "just start":
         difficulty = "Medium"
 
-        print("\nUsing default settings:")
-        print("Role:", role)
-        print("Round:", round_type)
-        print("Difficulty:", difficulty)
-    else:
-        round_type = input("Enter interview round: ").strip()
-        difficulty = input(
-            "Enter difficulty (Easy/Medium/Hard): "
-        ).strip()
-
-        round_type = round_type or "Technical"
-        difficulty = difficulty or "Medium"
-
-    session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    session_id = datetime.now().strftime("session_%Y%m%d_%H%M%S")
 
     session = {
         "session_id": session_id,
         "thread_id": session_id,
         "role": role,
-        "round": round_type,
+        "round": interview_round,
         "difficulty": difficulty,
-        "started_at": datetime.now().isoformat(),
-        "updated_at": datetime.now().isoformat(),
         "answers": [],
-        "current_question": ""
+        "scorecards": [],
+        "current_question": None,
+        "pending_answer": None,
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
     }
 
-    session_file = SESSIONS_DIR / f"session_{session_id}.json"
+    session_file = SESSIONS_DIR / f"{session_id}.json"
     save_session(session, session_file)
+
+    print("\nInterview session created successfully.")
+    print(f"Role: {role}")
+    print(f"Round: {interview_round}")
+    print(f"Difficulty: {difficulty}")
 
     return session, session_file
 
-def build_weak_topic_context():
-    """Prepare previous weak topics for a new interview."""
 
-    weak_topics = read_weak_topics()
+# --------------------------------------------------
+# APPROVAL BEFORE DESTRUCTIVE OPERATIONS
+# --------------------------------------------------
 
-    if not weak_topics:
-        return "No previously recorded weak topics."
+def request_file_approval(file_path, action="overwrite"):
+    """Ask permission before a destructive file operation."""
 
-    return "\n".join(
-        f"- {topic}" for topic in weak_topics
+    if not file_path.exists():
+        print("File does not exist.")
+        return "reject"
+
+    print(f"\nWARNING: You are about to {action}: {file_path}")
+    print("1. Approve")
+    print("2. Edit")
+    print("3. Reject")
+
+    choice = input("Choose (1/2/3): ").strip()
+
+    if choice == "1":
+        print("Operation approved.")
+        return "approve"
+
+    if choice == "2":
+        print("Edit selected.")
+        return "edit"
+
+    print("Operation rejected. Original file remains unchanged.")
+    return "reject"
+
+
+def reset_weak_topics_with_approval():
+    """Reset or edit weak-topic history only after user approval."""
+
+    WEAK_TOPICS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    if not WEAK_TOPICS_FILE.exists():
+        print("Weak-topic file does not exist. Creating it.")
+        print(reset_weak_topics())
+        return
+
+    decision = request_file_approval(
+        WEAK_TOPICS_FILE,
+        "reset weak-topic history",
     )
-def build_next_question_prompt(session, last_answer):
-    scorecard = last_answer["scorecard"]
+
+    if decision == "approve":
+        print(reset_weak_topics())
+
+    elif decision == "edit":
+        print("\nEnter the new weak-topic file content.")
+        print("Press Enter on an empty line to finish.")
+
+        lines = []
+        while True:
+            line = input()
+            if not line:
+                break
+            lines.append(line)
+
+        new_content = "\n".join(lines) + "\n"
+
+        confirm = input("Save this edited content? (yes/no): ").strip().lower()
+
+        if confirm == "yes":
+            WEAK_TOPICS_FILE.write_text(
+                new_content,
+                encoding="utf-8",
+            )
+            print("Edited weak-topic file saved.")
+        else:
+            print("Edit cancelled. Original file remains unchanged.")
+
+    else:
+        print("Weak-topic history was not changed.")
+
+
+# --------------------------------------------------
+# SESSION SELECTION AND DELETION
+# --------------------------------------------------
+def reset_weak_topics_with_approval():
+    """Reset weak-topic history only after user approval."""
+
+    file_path = Path("workspace/weak-topics.md")
+
+    if not file_path.exists():
+        print("Weak-topic file does not exist.")
+        return
+
+    decision = request_file_approval(
+        file_path,
+        "reset weak-topic history"
+    )
+
+    if decision == "approve" or decision == "1":
+        print(reset_weak_topics())
+
+    elif decision == "edit" or decision == "2":
+        print("Edit selected. Original file has not been changed.")
+        print("Please use a text editor to modify the file manually.")
+
+    else:
+        print("Operation rejected. Original file remains unchanged.")
+def choose_session():
+    """Resume an existing session, create a new one, or delete a session."""
+
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+    existing_sessions = sorted(SESSIONS_DIR.glob("*.json"))
+
+    print("\n========== MOCKMATE ==========")
+    print("1. Enter an existing session ID to resume")
+    print("2. Press Enter to start a new interview")
+    print("3. Type 'delete' to delete a session")
+    print("4. Type 'reset' to manage weak-topic history")
+
+    if existing_sessions:
+        print("\nAvailable sessions:")
+        for file in existing_sessions:
+            print(f"- {file.stem}")
+
+    choice = input("\nYour choice: ").strip()
+
+    if choice.lower() == "reset":
+        reset_weak_topics_with_approval()
+        return None, None
+
+    if choice.lower() == "delete":
+        session_id = input("Enter the session ID to delete: ").strip()
+
+        if not session_id:
+            print("No session ID entered.")
+            return None, None
+
+        session_file = (
+            SESSIONS_DIR / f"{session_id}.json"
+        ).resolve()
+
+        sessions_root = SESSIONS_DIR.resolve()
+
+        if (
+            not session_file.is_relative_to(sessions_root)
+            or not session_file.is_file()
+        ):
+            print("Session not found or invalid session path.")
+            return None, None
+
+        decision = request_file_approval(
+            session_file,
+            "delete interview session",
+        )
+
+        if decision == "approve":
+            session_file.unlink()
+            print("Interview session deleted successfully.")
+        elif decision == "edit":
+            print("Editing is not available for session deletion.")
+            print("The original session was not deleted.")
+        else:
+            print("Session deletion cancelled.")
+
+        return None, None
+
+    if choice:
+        session_file = (SESSIONS_DIR / f"{choice}.json").resolve()
+
+        if (
+            not session_file.is_relative_to(SESSIONS_DIR.resolve())
+            or not session_file.is_file()
+        ):
+            print("Session not found.")
+            return None, None
+
+        session = json.loads(session_file.read_text(encoding="utf-8"))
+
+        print("\nPrevious interview session loaded.")
+        print(f"Role: {session.get('role', 'Unknown')}")
+        print(f"Round: {session.get('round', 'Unknown')}")
+        print(f"Difficulty: {session.get('difficulty', 'Unknown')}")
+
+        return session, session_file
+
+    return create_session()
+
+
+# --------------------------------------------------
+# WEAK TOPIC ADAPTATION
+# --------------------------------------------------
+
+def build_weak_topic_context():
+    """Read weak topics from previous interview sessions."""
+
+    topics = read_weak_topics()
+
+    if not topics:
+        return "No previous weak topics were recorded."
+
+    context = "Previously identified weak topics:\n"
+
+    for topic in topics:
+        context += f"- {topic}\n"
+
+    return context
+
+
+def build_next_question_prompt(session):
+    """Build the prompt for the next interview question."""
+
+    weak_topic_context = build_weak_topic_context()
 
     return f"""
-Continue the same technical interview.
+Continue the mock technical interview.
 
 Candidate role: {session['role']}
 Interview round: {session['round']}
 Difficulty: {session['difficulty']}
 
-Previous question:
-{last_answer['question']}
+{weak_topic_context}
 
-Candidate's answer:
-{last_answer['answer']}
-
-Evaluation score:
-{scorecard['score']}/10
-
-Strengths:
-{scorecard['strengths']}
-
-Areas to improve:
-{scorecard['gaps']}
-
-Next topic:
-{scorecard['next_topic']}
-
-Ask exactly ONE new interview question.
-Focus on the next topic and adapt the question to the candidate's performance.
-Do not reveal the answer.
+Instructions:
+1. Ask exactly ONE interview question.
+2. Do not answer the question yourself.
+3. Do not provide the model answer.
+4. Wait for the candidate's response.
+5. Prefer testing previously identified weak topics when appropriate.
+6. Keep the question relevant to the candidate's role and interview round.
 """
 
 
-def evaluate_and_record(question, answer):
+# --------------------------------------------------
+# SCORECARD DISPLAY AND EVALUATION
+# --------------------------------------------------
+
+def print_scorecard(scorecard):
+    """Display the validated interview scorecard."""
+
+    print("\n========== ANSWER SCORECARD ==========")
+    print(f"Score: {scorecard.score}/10")
+
+    print("\nStrengths:")
+    for item in scorecard.strengths:
+        print(f"- {item}")
+
+    print("\nAreas to improve:")
+    for item in scorecard.gaps:
+        print(f"- {item}")
+
+    print(f"\nHint: {scorecard.hint}")
+    print(f"Next topic: {scorecard.next_topic}")
+    print("======================================\n")
+
+
+def evaluate_and_record(session, question, answer):
+    """Evaluate an answer and record its scorecard."""
+
     scorecard = evaluate_answer(question, answer)
+
     print_scorecard(scorecard)
 
-    weak_result = record_weak_topics(scorecard)
-    print("\nMockMate:", weak_result)
+    session["answers"].append({
+        "question": question,
+        "answer": answer,
+        "score": scorecard.score,
+    })
+
+    session["scorecards"].append(scorecard.model_dump())
+
+    result = record_weak_topics(scorecard)
+    print(result)
 
     return scorecard
 
 
+# --------------------------------------------------
+# RESPONSE HANDLING
+# --------------------------------------------------
+
+def get_response_text(response):
+    """Extract readable text from the interviewer response."""
+
+    if isinstance(response, str):
+        return response
+
+    if isinstance(response, dict):
+        if "messages" in response and response["messages"]:
+            message = response["messages"][-1]
+            return getattr(message, "content", str(message))
+
+        if "output" in response:
+            return str(response["output"])
+
+    return str(response)
+
+
+# --------------------------------------------------
+# MAIN INTERVIEW LOOP
+# --------------------------------------------------
+
 def main():
-    session, session_file, is_resuming = choose_session()
 
-    if not is_resuming:
-        session, session_file = create_session()
+    session, session_file = choose_session()
 
-    role = session["role"]
-    round_type = session["round"]
-    difficulty = session["difficulty"]
+    # A reset or deletion operation returns no session.
+    if session is None:
+        return
 
     thread_id = session.get("thread_id", session["session_id"])
-    session["thread_id"] = thread_id
 
-    session.setdefault("current_question", "")
-    session.setdefault("answers", [])
+    print("\nMockMate interview started.")
+    print("Type 'exit' at the answer prompt to stop the interview.")
 
-    print("\n===================================")
-    print("          INTERVIEW DETAILS")
-    print("===================================")
-    print("Role:", role)
-    print("Round:", round_type)
-    print("Difficulty:", difficulty)
+    # Recover an answer if its evaluation was interrupted.
+    if session.get("pending_answer") and session.get("current_question"):
 
-    if is_resuming:
-        print("\nMockMate: Resuming your previous interview...")
-    else:
-        print("\nMockMate: Starting your new interview...")
+        print("\nRecovering your previous unanswered evaluation...")
 
-    question_number = len(session["answers"]) + 1
-    question = session["current_question"]
-
-    try:
-        # Recover an answer if its evaluation was interrupted.
-        if session.get("pending_answer"):
-            pending = session["pending_answer"]
-
-            print("\nRecovering your previous answer...")
-            print("\nQuestion:", pending["question"])
-            print("\nYour answer:", pending["answer"])
-
-            scorecard = evaluate_and_record(
-                pending["question"],
-                pending["answer"]
+        try:
+            evaluate_and_record(
+                session,
+                session["current_question"],
+                session["pending_answer"],
             )
 
-            session["answers"].append({
-                "question_number": pending["question_number"],
-                "question": pending["question"],
-                "answer": pending["answer"],
-                "scorecard": scorecard.model_dump()
-            })
-
-            session.pop("pending_answer", None)
+            session["pending_answer"] = None
             save_session(session, session_file)
 
-            last_answer = session["answers"][-1]
-            next_prompt = build_next_question_prompt(
-                session, last_answer
-            )
+        except Exception as error:
+            save_session(session, session_file)
+            print(f"Could not recover evaluation: {error}")
+            print("Your answer remains saved for the next run.")
+            return
 
-            question = ask_interviewer(next_prompt, thread_id)
-            session["current_question"] = question
+    while True:
+
+        # Generate a question if one is not already waiting.
+        if not session.get("current_question"):
+
+            prompt = build_next_question_prompt(session)
+
+            try:
+                response = ask_interviewer(prompt, thread_id)
+                question = get_response_text(response)
+
+            except Exception as error:
+                print(f"Interviewer error: {error}")
+                save_session(session, session_file)
+                return
+
+            session["current_question"] = question.strip()
             save_session(session, session_file)
 
-            question_number = len(session["answers"]) + 1
+            print("\nMockMate:")
+            print(session["current_question"])
 
-        # Resume a session without a current question.
-        if not question and session["answers"]:
-            last_answer = session["answers"][-1]
-            next_prompt = build_next_question_prompt(
-                session, last_answer
-            )
+        # Wait for the candidate's answer.
+        answer = input("\nYou: ").strip()
 
-            question = ask_interviewer(next_prompt, thread_id)
-            session["current_question"] = question
+        if answer.lower() in ("exit", "quit"):
             save_session(session, session_file)
+            print("\nInterview paused. Your session has been saved.")
+            print(f"Session ID: {session['session_id']}")
+            break
 
-        # Start a new interview.
-        if not question:
-            weak_topic_context = build_weak_topic_context()
-            
-            interview_context = f"""
-            Start a technical interview.
-            
-            Candidate role: {role}
-            Interview round: {round_type}
-            Difficulty: {difficulty}
-            
-            Previously identified weak topics:
-            {weak_topic_context}
-            
-            If weak topics exist, prioritize them when choosing
-            the interview question. Ask exactly ONE question.
-            Do not reveal the answer.
-            """
+        if not answer:
+            print("Please enter an answer before continuing.")
+            continue
 
-            question = ask_interviewer(interview_context, thread_id)
-            session["current_question"] = question
-            save_session(session, session_file)
-
-        print("\nMockMate:", question)
-
-        while True:
-            answer = input("\nYou: ").strip()
-
-            if answer.lower() in ["exit", "quit", "stop"]:
-                print("\nMockMate: Your interview has been paused.")
-                print("You can resume it later using this Session ID:")
-                print(session["session_id"])
-                break
-
-            if not answer:
-                print("MockMate: Please enter your answer.")
-                continue
-
-            # Save answer before evaluation.
-            session["pending_answer"] = {
-                "question_number": question_number,
-                "question": question,
-                "answer": answer
-            }
-            save_session(session, session_file)
-
-            print("\nMockMate: Evaluating your answer...")
-
-            scorecard = evaluate_and_record(question, answer)
-
-            session["answers"].append({
-                "question_number": question_number,
-                "question": question,
-                "answer": answer,
-                "scorecard": scorecard.model_dump()
-            })
-
-            session.pop("pending_answer", None)
-            save_session(session, session_file)
-
-            last_answer = session["answers"][-1]
-            next_prompt = build_next_question_prompt(
-                session, last_answer
-            )
-
-            question = ask_interviewer(next_prompt, thread_id)
-            session["current_question"] = question
-            save_session(session, session_file)
-
-            print("\nMockMate:", question)
-            question_number += 1
-
-    except Exception as error:
-        print("\nMockMate encountered an error:")
-        print(error)
-        print("\nYour session has been saved. You can resume it later.")
-
-    finally:
+        # Save the answer before evaluation so it can be recovered.
+        session["pending_answer"] = answer
         save_session(session, session_file)
-        print("\nSession saved at", session_file)
+
+        try:
+            evaluate_and_record(
+                session,
+                session["current_question"],
+                answer,
+            )
+
+            session["pending_answer"] = None
+            session["current_question"] = None
+            save_session(session, session_file)
+
+        except Exception as error:
+            save_session(session, session_file)
+            print(f"Evaluation error: {error}")
+            print("Your answer has been saved. You can resume this session later.")
+            break
 
 
 if __name__ == "__main__":

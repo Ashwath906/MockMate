@@ -5,11 +5,12 @@ from pydantic import ValidationError
 
 from langchain.chat_models import init_chat_model
 from langchain.agents import create_agent
+from langchain.agents.middleware import SummarizationMiddleware
 
 from mockmate.tools import save_file
 from mockmate.scorecard import InterviewScorecard
 from mockmate.memory import checkpointer, get_thread_config
-from langchain.agents.middleware import SummarizationMiddleware
+
 load_dotenv()
 
 MODEL_PROVIDER = os.getenv("MODEL_PROVIDER")
@@ -19,10 +20,13 @@ API_KEY = os.getenv("GOOGLE_API_KEY")
 if not MODEL_PROVIDER or not MODEL_NAME or not API_KEY:
     raise ValueError("Missing model configuration in .env")
 
+# Use a timeout and avoid repeated retries on failed requests.
 model = init_chat_model(
     MODEL_NAME,
     model_provider=MODEL_PROVIDER,
-    api_key=API_KEY
+    api_key=API_KEY,
+    timeout=60,
+    max_retries=1,
 )
 
 SYSTEM_PROMPT = """
@@ -49,15 +53,32 @@ agent = create_agent(
         SummarizationMiddleware(
             model,
             trigger=("messages", 12),
-            keep=("messages", 6)
+            keep=("messages", 6),
         )
-    ]
+    ],
 )
+
+
+def extract_text(content) -> str:
+    """Extract readable text from model responses."""
+
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        return "\n".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") == "text"
+        )
+
+    return str(content)
 
 
 def ask_interviewer(
     user_input: str,
-    thread_id: str = "mockmate-default"
+    thread_id: str = "mockmate-default",
 ) -> str:
 
     result = agent.invoke(
@@ -66,41 +87,30 @@ def ask_interviewer(
                 {"role": "user", "content": user_input}
             ]
         },
-        config=get_thread_config(thread_id)
+        config=get_thread_config(thread_id),
     )
 
-    content = result["messages"][-1].content
-
-    if isinstance(content, str):
-        return content
-
-    if isinstance(content, list):
-        return "\n".join(
-            block["text"]
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "text"
-        )
-
-    return str(content)
+    return extract_text(result["messages"][-1].content)
 
 
 def evaluate_answer(
     question: str,
-    answer: str
+    answer: str,
 ) -> InterviewScorecard:
 
     evaluation_prompt = f"""
-    Evaluate this interview answer honestly.
+Evaluate this interview answer honestly.
 
-    Question: {question}
-    Candidate answer: {answer}
+Question: {question}
 
-    Return a score from 0 to 10.
-    Give exactly 2 strengths.
-    Give exactly 2 gaps.
-    Give 1 improvement hint.
-    Give 1 next topic.
-    """
+Candidate answer: {answer}
+
+Return a score from 0 to 10.
+Give exactly 2 strengths.
+Give exactly 2 gaps.
+Give 1 improvement hint.
+Give 1 next topic.
+"""
 
     structured_model = model.with_structured_output(
         InterviewScorecard
@@ -109,20 +119,25 @@ def evaluate_answer(
     for attempt in range(2):
         try:
             result = structured_model.invoke(evaluation_prompt)
+
+            if isinstance(result, InterviewScorecard):
+                return result
+
             return InterviewScorecard.model_validate(result)
 
         except (ValidationError, ValueError, TypeError) as error:
             evaluation_prompt += f"""
 
-            Your previous response was invalid:
-            {error}
+Previous response was invalid:
+{error}
 
-            Try again. Follow every scorecard requirement exactly.
-            """
+Try again. Follow every scorecard requirement exactly.
+"""
 
     raise ValueError(
         "Gemini failed to generate a valid scorecard after 2 attempts."
     )
+
 
 def has_saved_conversation(thread_id: str) -> bool:
     """Check whether a conversation exists in SQLite memory."""
