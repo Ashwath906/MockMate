@@ -63,3 +63,39 @@ def ask_interviewer(user_input: str) -> str:
         )
 
     return str(content)
+
+from pydantic import ValidationError
+from mockmate.scorecard import InterviewScorecard
+
+
+def evaluate_answer(question: str, answer: str) -> InterviewScorecard:
+    evaluation_prompt = f"""
+    Evaluate this interview answer honestly.
+
+    Question: {question}
+    Candidate answer: {answer}
+
+    Return a score from 0 to 10.
+    Give exactly 2 strengths.
+    Give exactly 2 gaps.
+    Give 1 improvement hint.
+    Give 1 next topic.
+    """
+
+    structured_model = model.with_structured_output(InterviewScorecard)
+
+    for attempt in range(2):
+        try:
+            result = structured_model.invoke(evaluation_prompt)
+            return InterviewScorecard.model_validate(result)
+
+        except (ValidationError, ValueError, TypeError) as error:
+            evaluation_prompt += f"""
+
+            Your previous response was invalid:
+            {error}
+
+            Try again. Follow every scorecard requirement exactly.
+            """
+
+    raise ValueError("Gemini failed to generate a valid scorecard after 2 attempts.")
