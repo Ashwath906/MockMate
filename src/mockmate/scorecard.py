@@ -9,6 +9,6 @@ class InterviewScorecard(BaseModel):
 
     gaps: list[str] = Field(min_length=2, max_length=2)
 
-    hint: str
+    hint: str = Field(min_length=1)
 
-    next_topic: str
+    next_topic: str = Field(min_length=1)
