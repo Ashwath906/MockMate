@@ -103,6 +103,7 @@ uv run python main.py
 3. Enter your target job role.
 4. Select the interview round.
 5. Choose the difficulty level.
+- Tip: Type `just start` at any setup prompt to automatically select the default option.
 6. Answer the interview questions.
 7. Review the evaluation scorecard and improvement suggestions.
 8. Type `exit` to leave the interview.
@@ -136,7 +137,16 @@ Run the application:
 ```bash
 uv run python main.py
 ```
+## Demo Instructions
 
+1. Run `uv run python main.py`.
+2. Press Enter to start a new interview.
+3. Enter a target role, interview round, and difficulty.
+4. Type `just start` at setup prompts to use defaults.
+5. Answer the interview questions one at a time.
+6. Review the scorecard and improvement suggestions.
+7. Type `exit` to pause and save the interview.
+8. Run the application again and select the saved session ID to resume.
 ## Future Enhancements
 
 - Interview performance analytics
