@@ -84,7 +84,7 @@ Example:
 
 ```env
 MODEL_PROVIDER=google_genai
-MODEL_NAME=gemini-3.8-flash
+MODEL_NAME=gemini-3.5-flash
 GOOGLE_API_KEY=your_actual_api_key
 ```
 
