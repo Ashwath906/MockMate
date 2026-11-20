@@ -9,7 +9,7 @@ from langchain.agents import create_agent
 from mockmate.tools import save_file
 from mockmate.scorecard import InterviewScorecard
 from mockmate.memory import checkpointer, get_thread_config
-
+from langchain.agents.middleware import SummarizationMiddleware
 load_dotenv()
 
 MODEL_PROVIDER = os.getenv("MODEL_PROVIDER")
@@ -44,7 +44,14 @@ agent = create_agent(
     model=model,
     tools=[save_file],
     system_prompt=SYSTEM_PROMPT,
-    checkpointer=checkpointer
+    checkpointer=checkpointer,
+    middleware=[
+        SummarizationMiddleware(
+            model,
+            trigger=("messages", 12),
+            keep=("messages", 6)
+        )
+    ]
 )
 
 
