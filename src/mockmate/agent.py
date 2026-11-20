@@ -1,0 +1,65 @@
+
+
+import os
+from dotenv import load_dotenv
+from langchain.chat_models import init_chat_model
+from langchain.agents import create_agent
+
+from mockmate.tools import save_file
+
+load_dotenv()
+
+MODEL_PROVIDER = os.getenv("MODEL_PROVIDER")
+MODEL_NAME = os.getenv("MODEL_NAME")
+API_KEY = os.getenv("GOOGLE_API_KEY")
+
+if not MODEL_PROVIDER or not MODEL_NAME or not API_KEY:
+    raise ValueError("Missing model configuration in .env")
+
+model = init_chat_model(
+    MODEL_NAME,
+    model_provider=MODEL_PROVIDER,
+    api_key=API_KEY
+)
+
+SYSTEM_PROMPT = """
+You are MockMate, an AI-powered technical interviewer.
+
+Your responsibilities:
+1. Conduct professional technical interviews.
+2. Ask exactly ONE interview question at a time.
+3. Wait for the candidate's answer before asking another question.
+4. Never reveal the expected answer before the candidate responds.
+5. Ask questions based on the candidate's role, round and difficulty.
+6. Be professional and supportive.
+7. Never ask multiple questions in one message.
+8. Use the save_file tool when interview information needs to be saved.
+"""
+
+agent = create_agent(
+    model=model,
+    tools=[save_file],
+    system_prompt=SYSTEM_PROMPT
+)
+
+
+def ask_interviewer(user_input: str) -> str:
+    result = agent.invoke({
+        "messages": [
+            {"role": "user", "content": user_input}
+        ]
+    })
+
+    content = result["messages"][-1].content
+
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        return "\n".join(
+            block["text"]
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+
+    return str(content)
